@@ -29,13 +29,54 @@ st.set_page_config(
     layout="wide"
 )
 
+ # Quick Start Guide for Recruiters (Collapsible)
+with st.expander("📋 Quick Start Guide - Click to View", expanded=False):
+    tab1, tab2 = st.tabs(["🚀 Pre-made Demo (Recommended)", "📄 Upload Your Own"])
+
+    with tab1:
+        st.markdown("""
+        ### **Fastest Way to Test (30 seconds):**
+        1. Select **"Pre-made Documents"** below
+        2. Choose **"Harry Potter"** or any report
+        3. Ask these example questions:
+
+        **Harry Potter Examples:**
+        - *"What house was Harry Potter sorted into and why?"*
+        - *"Describe Harry's first encounter with Voldemort"*
+
+        **Business Report Examples:**
+        - *"What were the main revenue streams mentioned?"*
+        - *"What challenges does the company highlight for next year?"*
+        """)
+
+    with tab2:
+        st.markdown("""
+        ### **Upload Your Own Document:**
+        1. Select **"Upload PDF"** below
+        2. Upload any PDF document
+        3. Wait for processing (2-5 minutes)
+        4. Ask questions about your document
+
+        **What You'll See:**
+        - Retrieved relevant sections from your document
+        - AI-generated answers with reasoning
+        - Source citations with page numbers
+        - Transparent processing steps
+        """)
+
+    st.markdown("---")
+
 # Initialize session state
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = {}
 if 'pipeline_step' not in st.session_state:
     st.session_state.pipeline_step = 0
 if 'openai_api_key' not in st.session_state:
-    st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+# Try Streamlit secrets first, then environment variables
+    try:
+        st.session_state.openai_api_key = st.secrets["OPENAI_API_KEY"]
+    except:
+        st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
 if 'document_type' not in st.session_state:
     st.session_state.document_type = "upload"  # "upload", "premade"
 if 'selected_premade' not in st.session_state:
@@ -883,27 +924,34 @@ def main():
     st.title("🔍 Advanced RAG Pipeline Demo")
     st.markdown("**Upload a PDF and watch the complete RAG process in action, plus evaluate system performance!**")
     
-    # Sidebar with API key input and process overview
-    st.sidebar.title("🔧 Configuration")
-    
-    # OpenAI API Key Input
-    api_key_input = st.sidebar.text_input(
-        "🔑 OpenAI API Key",
-        value=st.session_state.openai_api_key,
-        type="password",
-        help="Enter your OpenAI API key to enable embedding creation and querying"
-    )
-    
-    if api_key_input != st.session_state.openai_api_key:
-        st.session_state.openai_api_key = api_key_input
-        os.environ["OPENAI_API_KEY"] = api_key_input
-    
-    # Show API key status
+      # API key is loaded from secrets - show status only
     if st.session_state.openai_api_key:
-        st.sidebar.success("✅ API Key Set")
+        st.sidebar.success("✅ API Key Loaded")
     else:
-        st.sidebar.warning("⚠️ API Key Required")
-        st.sidebar.markdown("You need an OpenAI API key for steps 4 and 5 (Vector DB creation and querying)")
+        st.sidebar.error("❌ API Key Not Found in Secrets")
+
+
+    # # Sidebar with API key input and process overview
+    # st.sidebar.title("🔧 Configuration")
+    
+    # # OpenAI API Key Input
+    # api_key_input = st.sidebar.text_input(
+    #     "🔑 OpenAI API Key",
+    #     value=st.session_state.openai_api_key,
+    #     type="password",
+    #     help="Enter your OpenAI API key to enable embedding creation and querying"
+    # )
+    
+    # if api_key_input != st.session_state.openai_api_key:
+    #     st.session_state.openai_api_key = api_key_input
+    #     os.environ["OPENAI_API_KEY"] = api_key_input
+    
+    # # Show API key status
+    # if st.session_state.openai_api_key:
+    #     st.sidebar.success("✅ API Key Set")
+    # else:
+    #     st.sidebar.warning("⚠️ API Key Required")
+    #     st.sidebar.markdown("You need an OpenAI API key for steps 4 and 5 (Vector DB creation and querying)")
     
     st.sidebar.markdown("---")
     
