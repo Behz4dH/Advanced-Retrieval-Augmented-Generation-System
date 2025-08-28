@@ -1,0 +1,9 @@
+{
+  "name": "Harry Potter",
+  "pdf_path": "data\\harrypotter.pdf",
+  "has_evaluation": false,
+  "description": "Literary content for demonstrating text-based queries",
+  "doc_id": "harrypotter",
+  "sha1_name": "harrypotter",
+  "processing_completed": true
+}

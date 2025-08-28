@@ -1,0 +1,9 @@
+{
+  "name": "Tradition Annual Report",
+  "pdf_path": "data\\test_set\\pdf_reports\\2779336b845a41544348abb7b3e6e5bd2ff893a2.pdf",
+  "has_evaluation": true,
+  "description": "Financial annual report with numerical data and metrics",
+  "doc_id": "test_tradition",
+  "sha1_name": "2779336b845a41544348abb7b3e6e5bd2ff893a2",
+  "processing_completed": true
+}

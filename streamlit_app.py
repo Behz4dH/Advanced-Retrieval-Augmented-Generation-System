@@ -36,6 +36,10 @@ if 'pipeline_step' not in st.session_state:
     st.session_state.pipeline_step = 0
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+if 'document_type' not in st.session_state:
+    st.session_state.document_type = "upload"  # "upload", "premade"
+if 'selected_premade' not in st.session_state:
+    st.session_state.selected_premade = None
 if 'advanced_settings' not in st.session_state:
     st.session_state.advanced_settings = {
         'enable_reranking': True,
@@ -46,6 +50,53 @@ if 'advanced_settings' not in st.session_state:
         'llm_weight': 0.7,
         'answering_model': 'gpt-4o-mini-2024-07-18'
     }
+
+def load_premade_documents():
+    """Load information about available pre-made documents"""
+    premade_dir = Path("data/premade_embeddings")
+    if not premade_dir.exists():
+        return {}
+    
+    documents = {}
+    for doc_dir in premade_dir.iterdir():
+        if doc_dir.is_dir() and (doc_dir / "document_info.json").exists():
+            try:
+                with open(doc_dir / "document_info.json", 'r', encoding='utf-8') as f:
+                    doc_info = json.load(f)
+                    documents[doc_info['doc_id']] = doc_info
+            except Exception as e:
+                st.warning(f"Could not load document info for {doc_dir.name}: {e}")
+    
+    return documents
+
+def setup_premade_document(doc_id: str, doc_info: dict) -> Dict[Path, Path]:
+    """Setup directory structure for pre-made document"""
+    premade_dir = Path("data/premade_embeddings") / doc_id
+    
+    dirs = {
+        'root': premade_dir,
+        'pdf_dir': premade_dir / "pdf_reports",
+        'parsed_dir': premade_dir / "debug_data" / "01_parsed_reports", 
+        'merged_dir': premade_dir / "debug_data" / "02_merged_reports",
+        'chunked_dir': premade_dir / "databases" / "chunked_reports",
+        'vector_db_dir': premade_dir / "databases" / "vector_dbs"
+    }
+    
+    # Verify all required directories exist
+    required_dirs = ['chunked_dir', 'vector_db_dir']
+    for dir_key in required_dirs:
+        if not dirs[dir_key].exists():
+            st.error(f"❌ Pre-made embeddings not found for {doc_info['name']}. Please run create_premade_embeddings.py first.")
+            return None
+    
+    return dirs
+
+def has_evaluation_available(doc_id: str) -> bool:
+    """Check if evaluation is available for this document"""
+    premade_docs = load_premade_documents()
+    if doc_id in premade_docs:
+        return premade_docs[doc_id].get('has_evaluation', False)
+    return False
 
 def create_temp_directories():
     """Create temporary directories for processing"""
@@ -322,9 +373,10 @@ def get_answer_with_cot(query: str, context: str, answering_model: str = "gpt-4o
             "final_answer": "N/A"
         }
 
-def step5_query_system(dirs: Dict[Path, Path], sha1_name: str) -> Dict:
+def step5_query_system(dirs: Dict[Path, Path], sha1_name: str, in_tab: bool = False, company_name: str = "Demo Company") -> Dict:
     """Step 5: Advanced Query & Retrieval with CoT"""
-    st.subheader("🔍 Step 5: Advanced Query & Retrieval")
+    if not in_tab:
+        st.subheader("🔍 Step 5: Advanced Query & Retrieval")
     
     # Check if we have the necessary files
     if not st.session_state.openai_api_key:
@@ -376,14 +428,17 @@ def step5_query_system(dirs: Dict[Path, Path], sha1_name: str) -> Dict:
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            query = st.text_input("Enter your question:", placeholder="What would you like to know about this document?")
+            query_key = "tab_query_input" if in_tab else "main_query_input"
+            query = st.text_input("Enter your question:", placeholder="What would you like to know about this document?", key=query_key)
         with col2:
             st.write("**Sample queries:**")
             for sample in sample_queries:
-                if st.button(sample, key=f"sample_{sample[:20]}"):
+                button_key = f"{'tab_' if in_tab else ''}sample_{sample[:20]}"
+                if st.button(sample, key=button_key):
                     query = sample
         
-        if query and st.button("🔍 Advanced Search", type="primary"):
+        search_button_key = f"{'tab_' if in_tab else ''}advanced_search_btn"
+        if query and st.button("🔍 Advanced Search", type="primary", key=search_button_key):
             with st.spinner("Performing advanced search..."):
                 try:
                     # Performance tracking
@@ -393,7 +448,7 @@ def step5_query_system(dirs: Dict[Path, Path], sha1_name: str) -> Dict:
                     # Perform retrieval based on settings
                     if st.session_state.advanced_settings['enable_reranking'] and isinstance(retriever, HybridRetriever):
                         results = retriever.retrieve_and_rerank(
-                            company_name="Demo Company",
+                            company_name=company_name,
                             query=query,
                             top_n=st.session_state.advanced_settings['top_n_retrieval'],
                             llm_reranking_sample_size=st.session_state.advanced_settings['reranking_sample_size'],
@@ -402,7 +457,7 @@ def step5_query_system(dirs: Dict[Path, Path], sha1_name: str) -> Dict:
                         )
                     else:
                         results = retriever.retrieve_by_company_name(
-                            company_name="Demo Company",
+                            company_name=company_name,
                             query=query,
                             top_n=st.session_state.advanced_settings['top_n_retrieval'],
                             return_parent_pages=st.session_state.advanced_settings['enable_parent_retrieval']
@@ -514,9 +569,319 @@ def step5_query_system(dirs: Dict[Path, Path], sha1_name: str) -> Dict:
         st.exception(e)  # Show detailed error for debugging
         return None
 
+def evaluate_rag_system(dirs: Dict[Path, Path], sha1_name: str, company_name: str = "Demo Company") -> Dict:
+    """Step 6: Evaluate RAG system performance against test questions"""
+    st.subheader("📊 Step 6: RAG System Evaluation")
+    
+    if not st.session_state.openai_api_key:
+        st.error("❌ OpenAI API key required for evaluation")
+        return None
+    
+    # Set the API key
+    os.environ["OPENAI_API_KEY"] = st.session_state.openai_api_key
+    
+    try:
+        # Load test questions - try to find them relative to current directory
+        project_root = Path.cwd()
+        test_questions_path = project_root / "data" / "test_set" / "questions.json"
+        ground_truth_path = project_root / "data" / "test_set" / "answers_max_nst_o3m.json"
+        
+        # Fallback: try different possible locations
+        if not test_questions_path.exists():
+            possible_paths = [
+                Path("data/test_set/questions.json"),
+                Path("./data/test_set/questions.json"),
+                Path("../data/test_set/questions.json")
+            ]
+            for path in possible_paths:
+                if path.exists():
+                    test_questions_path = path
+                    ground_truth_path = path.parent / "answers_max_nst_o3m.json"
+                    break
+        
+        # Use custom Tradition-specific questions if testing Tradition document
+        if company_name == "Tradition Annual Report":
+            st.info("📊 Using Tradition-specific evaluation questions")
+            test_questions = [
+                {"text": "Did Tradition announce a dividend payment in the annual report?", "kind": "boolean"},
+                {"text": "According to the annual report, what is the Operating margin (%) for Tradition (within the last period or at the end of the last period)? If data is not available, return 'N/A'.", "kind": "number"},
+                {"text": "Did Tradition mention any acquisitions in the annual report?", "kind": "boolean"},
+                {"text": "What was the dividend amount per share proposed by Tradition in CHF?", "kind": "number"},
+                {"text": "What was Tradition's consolidated revenue in CHF millions for 2022?", "kind": "number"}
+            ]
+            
+            # Ground truth for Tradition-specific questions
+            ground_truth = {
+                "Did Tradition announce a dividend payment in the annual report?": {
+                    "value": True,
+                    "kind": "boolean"
+                },
+                "According to the annual report, what is the Operating margin (%) for Tradition (within the last period or at the end of the last period)? If data is not available, return 'N/A'.": {
+                    "value": 9.9,
+                    "kind": "number"
+                },
+                "Did Tradition mention any acquisitions in the annual report?": {
+                    "value": True,
+                    "kind": "boolean"
+                },
+                "What was the dividend amount per share proposed by Tradition in CHF?": {
+                    "value": 5.5,
+                    "kind": "number"
+                },
+                "What was Tradition's consolidated revenue in CHF millions for 2022?": {
+                    "value": 1028.6,
+                    "kind": "number"
+                }
+            }
+            
+        elif not test_questions_path.exists():
+            st.warning("⚠️ Test questions not found. Using sample evaluation questions.")
+            test_questions = [
+                {"text": "What is the main topic of this document?", "kind": "name"},
+                {"text": "Are there any financial figures mentioned?", "kind": "boolean"},
+                {"text": "What is the revenue amount if available?", "kind": "number"}
+            ]
+            ground_truth = None
+        else:
+            with open(test_questions_path, 'r', encoding='utf-8') as f:
+                test_questions = json.load(f)
+            
+            ground_truth = None
+            if ground_truth_path.exists():
+                with open(ground_truth_path, 'r', encoding='utf-8') as f:
+                    ground_truth_data = json.load(f)
+                    ground_truth = {q["question_text"]: q for q in ground_truth_data["answers"]}
+
+        # Initialize retrievers
+        vector_retriever = VectorRetriever(
+            vector_db_dir=dirs['vector_db_dir'],
+            documents_dir=dirs['chunked_dir']
+        )
+        
+        retriever = vector_retriever
+        if st.session_state.advanced_settings['enable_reranking']:
+            retriever = HybridRetriever(
+                vector_db_dir=dirs['vector_db_dir'],
+                documents_dir=dirs['chunked_dir']
+            )
+
+        st.write(f"**Evaluating against {len(test_questions)} test questions...**")
+        
+        if st.button("🚀 Start Evaluation", type="primary"):
+            with st.spinner("Running evaluation..."):
+                evaluation_results = []
+                total_start_time = time.time()
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, question in enumerate(test_questions):
+                    status_text.text(f"Processing question {i+1}/{len(test_questions)}")
+                    progress_bar.progress((i + 1) / len(test_questions))
+                    
+                    question_text = question["text"]
+                    question_kind = question["kind"]
+                    
+                    # Performance tracking
+                    start_time = time.time()
+                    
+                    # Perform retrieval
+                    try:
+                        if st.session_state.advanced_settings['enable_reranking'] and isinstance(retriever, HybridRetriever):
+                            results = retriever.retrieve_and_rerank(
+                                company_name=company_name,
+                                query=question_text,
+                                top_n=st.session_state.advanced_settings['top_n_retrieval'],
+                                llm_reranking_sample_size=st.session_state.advanced_settings['reranking_sample_size'],
+                                return_parent_pages=st.session_state.advanced_settings['enable_parent_retrieval'],
+                                llm_weight=st.session_state.advanced_settings['llm_weight']
+                            )
+                        else:
+                            results = retriever.retrieve_by_company_name(
+                                company_name=company_name,
+                                query=question_text,
+                                top_n=st.session_state.advanced_settings['top_n_retrieval'],
+                                return_parent_pages=st.session_state.advanced_settings['enable_parent_retrieval']
+                            )
+                        
+                        # Generate Chain of Thought answer if enabled
+                        cot_answer = None
+                        if st.session_state.advanced_settings['enable_cot'] and results:
+                            context = "\n\n".join([f"Page {r['page']}:\n{r['text']}" for r in results])
+                            cot_answer = get_answer_with_cot(question_text, context, st.session_state.advanced_settings['answering_model'])
+                        
+                        processing_time = time.time() - start_time
+                        
+                        # Evaluate answer if ground truth available
+                        accuracy_score = None
+                        if ground_truth and question_text in ground_truth:
+                            gt_answer = ground_truth[question_text]
+                            if cot_answer:
+                                predicted_value = cot_answer.get('final_answer', 'N/A')
+                                gt_value = gt_answer.get('value', 'N/A')
+                                
+                                if question_kind == "boolean":
+                                    # Handle boolean comparisons more flexibly
+                                    pred_bool = str(predicted_value).lower().strip()
+                                    gt_bool = str(gt_value).lower().strip()
+                                    
+                                    # Convert various representations to standard bool
+                                    true_values = ['true', 'yes', '1', 'correct', 'positive']
+                                    false_values = ['false', 'no', '0', 'incorrect', 'negative']
+                                    
+                                    pred_is_true = pred_bool in true_values
+                                    gt_is_true = gt_bool in true_values or gt_value is True
+                                    
+                                    accuracy_score = 1.0 if pred_is_true == gt_is_true else 0.0
+                                    
+                                elif question_kind == "number":
+                                    try:
+                                        # Handle percentage and number extraction
+                                        pred_str = str(predicted_value).strip().replace('%', '')
+                                        pred_num = float(pred_str) if pred_str != 'N/A' else None
+                                        gt_num = float(gt_value) if gt_value != 'N/A' else None
+                                        
+                                        if pred_num is not None and gt_num is not None:
+                                            accuracy_score = 1.0 if abs(pred_num - gt_num) < 0.01 else 0.0
+                                        else:
+                                            accuracy_score = 1.0 if pred_num == gt_num else 0.0
+                                    except Exception as e:
+                                        accuracy_score = 0.0
+                                        
+                                else:  # name/text
+                                    accuracy_score = 1.0 if str(predicted_value).lower().strip() == str(gt_value).lower().strip() else 0.0
+                        
+                        evaluation_results.append({
+                            'question': question_text,
+                            'kind': question_kind,
+                            'processing_time': processing_time,
+                            'num_results': len(results),
+                            'cot_answer': cot_answer,
+                            'accuracy_score': accuracy_score,
+                            'results': results[:3]  # Store top 3 results for analysis
+                        })
+                        
+                    except Exception as e:
+                        evaluation_results.append({
+                            'question': question_text,
+                            'kind': question_kind,
+                            'processing_time': 0,
+                            'num_results': 0,
+                            'cot_answer': None,
+                            'accuracy_score': 0.0,
+                            'error': str(e),
+                            'results': []
+                        })
+                
+                total_time = time.time() - total_start_time
+                progress_bar.progress(1.0)
+                status_text.text("Evaluation completed!")
+                
+                # Calculate summary metrics
+                successful_queries = [r for r in evaluation_results if 'error' not in r]
+                failed_queries = [r for r in evaluation_results if 'error' in r]
+                
+                avg_processing_time = sum(r['processing_time'] for r in successful_queries) / len(successful_queries) if successful_queries else 0
+                avg_results_count = sum(r['num_results'] for r in successful_queries) / len(successful_queries) if successful_queries else 0
+                
+                # Calculate accuracy if ground truth available
+                accuracy_scores = [r['accuracy_score'] for r in evaluation_results if r['accuracy_score'] is not None]
+                overall_accuracy = sum(accuracy_scores) / len(accuracy_scores) if accuracy_scores else None
+                
+                st.success(f"✅ Evaluation completed in {total_time:.2f}s")
+                
+                # Display summary metrics
+                st.markdown("---")
+                st.subheader("📈 Evaluation Summary")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Questions", len(test_questions))
+                with col2:
+                    st.metric("Successful", len(successful_queries))
+                with col3:
+                    st.metric("Failed", len(failed_queries))
+                with col4:
+                    if overall_accuracy is not None:
+                        st.metric("Accuracy", f"{overall_accuracy:.2%}")
+                    else:
+                        st.metric("Accuracy", "N/A")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Time", f"{total_time:.2f}s")
+                with col2:
+                    st.metric("Avg Time/Question", f"{avg_processing_time:.3f}s")
+                with col3:
+                    st.metric("Throughput", f"{len(successful_queries)/total_time:.1f} Q/s")
+                with col4:
+                    st.metric("Avg Results/Query", f"{avg_results_count:.1f}")
+                
+                # Display detailed results
+                st.markdown("---")
+                st.subheader("📋 Detailed Results")
+                
+                for i, result in enumerate(evaluation_results):
+                    with st.expander(f"Question {i+1}: {result['question'][:60]}... ({'✅' if 'error' not in result else '❌'})"):
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            st.write(f"**Question:** {result['question']}")
+                            st.write(f"**Type:** {result['kind']}")
+                            
+                            if 'error' in result:
+                                st.error(f"**Error:** {result['error']}")
+                            else:
+                                if result['cot_answer']:
+                                    st.write(f"**Answer:** {result['cot_answer'].get('final_answer', 'N/A')}")
+                                    if result['accuracy_score'] is not None:
+                                        accuracy_emoji = "✅" if result['accuracy_score'] == 1.0 else "❌"
+                                        st.write(f"**Accuracy:** {accuracy_emoji} {result['accuracy_score']:.2%}")
+                                else:
+                                    st.write("**Answer:** No CoT answer generated")
+                        
+                        with col2:
+                            st.metric("Processing Time", f"{result['processing_time']:.3f}s")
+                            st.metric("Results Found", result['num_results'])
+                        
+                        # Show reasoning if available
+                        if result.get('cot_answer'):
+                            st.write("**🧠 Chain of Thought Reasoning:**")
+                            st.write("*Step-by-Step Analysis:*")
+                            st.write(result['cot_answer'].get('step_by_step_analysis', 'No analysis available'))
+                        
+                        # Show top retrieval results
+                        if result['results']:
+                            st.write(f"**🔍 Top Retrieval Results ({len(result['results'])}):**")
+                            for j, res in enumerate(result['results']):
+                                st.write(f"**Result {j+1}** (Page {res['page']}, Score: {res['distance']:.3f})")
+                                with st.container():
+                                    st.text_area(f"Content {j+1}", res['text'][:300] + "..." if len(res['text']) > 300 else res['text'], 
+                                                height=100, disabled=True, key=f"result_{i}_{j}")
+                                if j < len(result['results']) - 1:
+                                    st.markdown("---")
+                
+                return {
+                    'total_questions': len(test_questions),
+                    'successful_queries': len(successful_queries),
+                    'failed_queries': len(failed_queries),
+                    'overall_accuracy': overall_accuracy,
+                    'total_time': total_time,
+                    'avg_processing_time': avg_processing_time,
+                    'throughput': len(successful_queries)/total_time,
+                    'detailed_results': evaluation_results
+                }
+        
+        return {'initialized': True}
+        
+    except Exception as e:
+        st.error(f"❌ Error during evaluation: {str(e)}")
+        st.exception(e)
+        return None
+
 def main():
-    st.title("🔍 RAG Pipeline Demo")
-    st.markdown("**Upload a PDF and watch the complete RAG process in action!**")
+    st.title("🔍 Advanced RAG Pipeline Demo")
+    st.markdown("**Upload a PDF and watch the complete RAG process in action, plus evaluate system performance!**")
     
     # Sidebar with API key input and process overview
     st.sidebar.title("🔧 Configuration")
@@ -630,7 +995,8 @@ def main():
         "🔧 Report Processing",
         "✂️ Text Chunking",
         "🗄️ Vector DB Creation",
-        "🔍 Advanced Query & Retrieval"
+        "🔍 Advanced Query & Retrieval",
+        "📊 RAG System Evaluation"
     ]
     
     for i, step in enumerate(steps):
@@ -639,71 +1005,237 @@ def main():
         else:
             st.sidebar.info(step)
     
-    # Main interface
-    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    # Main interface - Document Selection
+    st.subheader("📄 Document Selection")
     
-    if uploaded_file is not None:
-        # Step 0: Setup
+    # Load available pre-made documents
+    premade_docs = load_premade_documents()
+    
+    # Document selection options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**🚀 Quick Start (Pre-made Embeddings)**")
+        if premade_docs:
+            premade_options = ["Select a pre-made document..."] + [
+                f"{doc_info['name']} {'📊' if doc_info.get('has_evaluation') else '📖'}" 
+                for doc_info in premade_docs.values()
+            ]
+            
+            selected_premade = st.selectbox(
+                "Choose from ready-to-use documents:",
+                options=premade_options,
+                key="premade_selector"
+            )
+            
+            if selected_premade != "Select a pre-made document...":
+                # Extract doc_id from selection - handle emoji properly
+                selected_doc_name = selected_premade.split(' 📊')[0].split(' 📖')[0]  # Remove emojis
+                selected_doc_id = None
+                for doc_id, doc_info in premade_docs.items():
+                    if doc_info['name'] == selected_doc_name:
+                        selected_doc_id = doc_id
+                        break
+                
+                if selected_doc_id:
+                    st.session_state.document_type = "premade"
+                    st.session_state.selected_premade = selected_doc_id
+                    
+                    # Show document info
+                    doc_info = premade_docs[selected_doc_id]
+                    st.info(f"**Selected**: {doc_info['name']}")
+                    st.write(f"📝 {doc_info['description']}")
+                    if doc_info.get('has_evaluation'):
+                        st.success("📊 Evaluation available for this document")
+                    else:
+                        st.info("📖 Query-only mode (no evaluation)")
+        else:
+            st.warning("⚠️ No pre-made documents available.")
+            with st.expander("📋 How to create pre-made embeddings"):
+                st.markdown("""
+                **To create pre-made embeddings:**
+                
+                1. **Set your OpenAI API key** in the `.env` file (rename `env` to `.env`)
+                2. **Run the generation script:**
+                   ```bash
+                   python create_premade_embeddings.py
+                   ```
+                3. **Wait for processing** (5-10 minutes for both documents)
+                4. **Refresh this app** to see the pre-made options
+                
+                **This will create:**
+                - 📊 **Tradition Annual Report** (with evaluation)
+                - 📖 **Harry Potter** (query-only)
+                """)
+                
+                if st.button("🚀 Create Pre-made Embeddings Now", type="primary"):
+                    if not os.getenv("OPENAI_API_KEY"):
+                        st.error("❌ Please set OPENAI_API_KEY in your .env file first")
+                    else:
+                        st.info("Creating embeddings... This will take several minutes.")
+                        try:
+                            # Import and run the creation function
+                            import subprocess
+                            result = subprocess.run([
+                                "python", "create_premade_embeddings.py"
+                            ], capture_output=True, text=True, cwd=".")
+                            
+                            if result.returncode == 0:
+                                st.success("✅ Pre-made embeddings created successfully!")
+                                st.info("Please refresh the page to see the new options.")
+                            else:
+                                st.error(f"❌ Error creating embeddings: {result.stderr}")
+                        except Exception as e:
+                            st.error(f"❌ Error running creation script: {str(e)}")
+    
+    with col2:
+        st.write("**📤 Upload Your Own Document**")
+        uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
+        
+        if uploaded_file is not None:
+            st.session_state.document_type = "upload"
+            st.session_state.selected_premade = None
+            st.info(f"**Uploaded**: {uploaded_file.name}")
+            st.write("🔧 Full processing pipeline will be executed")
+    
+    # Reset pipeline if document type OR selected document changes
+    current_document_id = f"{st.session_state.document_type}_{st.session_state.selected_premade}"
+    
+    if 'last_document_id' not in st.session_state:
+        st.session_state.last_document_id = current_document_id
+    elif st.session_state.last_document_id != current_document_id:
+        # Document changed, reset pipeline completely
+        keys_to_reset = ['processed_data', 'pipeline_step', 'dirs', 'sha1_name']
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.last_document_id = current_document_id
+        st.rerun()  # Force immediate rerun to refresh the interface
+    
+    # Handle document processing based on type
+    document_ready = False
+    
+    if st.session_state.document_type == "premade" and st.session_state.selected_premade:
+        # Pre-made document selected
+        doc_info = premade_docs[st.session_state.selected_premade]
+        
+        if 'dirs' not in st.session_state:
+            st.session_state.dirs = setup_premade_document(st.session_state.selected_premade, doc_info)
+            if st.session_state.dirs:
+                st.session_state.sha1_name = doc_info['sha1_name']
+        
+        if st.session_state.dirs:
+            st.success(f"🚀 Pre-made document loaded: {doc_info['name']}")
+            st.session_state.pipeline_step = 5  # Skip directly to query phase
+            document_ready = True
+            
+        else:
+            st.error("❌ Failed to setup pre-made document directories")
+    
+    elif st.session_state.document_type == "upload" and uploaded_file is not None:
+        # Uploaded document
         if 'dirs' not in st.session_state:
             st.session_state.dirs = create_temp_directories()
             st.session_state.pdf_path = save_uploaded_pdf(uploaded_file, st.session_state.dirs['pdf_dir'])
         
         st.success(f"📄 PDF uploaded: {uploaded_file.name}")
         st.session_state.pipeline_step = max(st.session_state.pipeline_step, 0)
+        document_ready = True
+    
+    if document_ready:
         
-        # Process button  
-        if st.button("🚀 Start Advanced RAG Pipeline", type="primary"):
+        # Show different UI based on document type
+        if st.session_state.document_type == "premade":
+            st.info("✨ Pre-made embeddings loaded! Skip directly to querying and evaluation.")
             
-            # Step 1: Parse PDF
-            if st.session_state.pipeline_step >= 0:
-                result1 = step1_parse_pdf(st.session_state.pdf_path, st.session_state.dirs)
-                if result1:
-                    st.session_state.processed_data['step1'] = result1
-                    st.session_state.pipeline_step = max(st.session_state.pipeline_step, 1)
-                else:
-                    return
-            
-            # Step 2: Merge reports  
-            if st.session_state.pipeline_step >= 1:
-                result2 = step2_merge_reports(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
-                if result2:
-                    st.session_state.processed_data['step2'] = result2
-                    st.session_state.pipeline_step = max(st.session_state.pipeline_step, 2)
-                else:
-                    return
-            
-            # Step 3: Chunk text
-            if st.session_state.pipeline_step >= 2:
-                result3 = step3_chunk_text(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
-                if result3:
-                    st.session_state.processed_data['step3'] = result3
-                    st.session_state.pipeline_step = max(st.session_state.pipeline_step, 3)
-                else:
-                    return
-            
-            # Step 4: Create vector database
-            if st.session_state.pipeline_step >= 3:
-                result4 = step4_create_vector_db(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
-                if result4:
-                    st.session_state.processed_data['step4'] = result4
-                    st.session_state.pipeline_step = max(st.session_state.pipeline_step, 4)
-                else:
-                    return
-            
-            # Step 5: Query system
-            if st.session_state.pipeline_step >= 4:
-                result5 = step5_query_system(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
-                if result5:
-                    st.session_state.processed_data['step5'] = result5
-                    st.session_state.pipeline_step = max(st.session_state.pipeline_step, 5)
+        else:
+            # Process button for uploaded documents
+            if st.button("🚀 Start Advanced RAG Pipeline", type="primary"):
+                
+                # Step 1: Parse PDF
+                if st.session_state.pipeline_step >= 0:
+                    result1 = step1_parse_pdf(st.session_state.pdf_path, st.session_state.dirs)
+                    if result1:
+                        st.session_state.processed_data['step1'] = result1
+                        st.session_state.pipeline_step = max(st.session_state.pipeline_step, 1)
+                    else:
+                        return
+                
+                # Step 2: Merge reports  
+                if st.session_state.pipeline_step >= 1:
+                    result2 = step2_merge_reports(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
+                    if result2:
+                        st.session_state.processed_data['step2'] = result2
+                        st.session_state.pipeline_step = max(st.session_state.pipeline_step, 2)
+                    else:
+                        return
+                
+                # Step 3: Chunk text
+                if st.session_state.pipeline_step >= 2:
+                    result3 = step3_chunk_text(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
+                    if result3:
+                        st.session_state.processed_data['step3'] = result3
+                        st.session_state.pipeline_step = max(st.session_state.pipeline_step, 3)
+                    else:
+                        return
+                
+                # Step 4: Create vector database
+                if st.session_state.pipeline_step >= 3:
+                    result4 = step4_create_vector_db(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
+                    if result4:
+                        st.session_state.processed_data['step4'] = result4
+                        st.session_state.pipeline_step = max(st.session_state.pipeline_step, 4)
+                    else:
+                        return
+                
+                # Step 5: Query system
+                if st.session_state.pipeline_step >= 4:
+                    result5 = step5_query_system(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'], company_name="Demo Company")
+                    if result5:
+                        st.session_state.processed_data['step5'] = result5
+                        st.session_state.pipeline_step = max(st.session_state.pipeline_step, 5)
         
         # Show query interface if pipeline is complete
-        if st.session_state.pipeline_step >= 5 and 'step5' in st.session_state.processed_data:
+        if st.session_state.pipeline_step >= 5:
             st.markdown("---")
-            step5_query_system(st.session_state.dirs, st.session_state.processed_data['step1']['sha1_name'])
+            
+            # Get sha1_name and company name based on document type
+            if st.session_state.document_type == "premade":
+                sha1_name = st.session_state.sha1_name
+                show_evaluation = has_evaluation_available(st.session_state.selected_premade)
+                # Get the correct company name from the document info
+                doc_info = premade_docs[st.session_state.selected_premade]
+                company_name = doc_info['name']
+            else:
+                sha1_name = st.session_state.processed_data['step1']['sha1_name']
+                show_evaluation = False  # No evaluation for uploaded documents (no ground truth)
+                company_name = "Demo Company"
+            
+            # Tab interface - conditionally show evaluation
+            if show_evaluation:
+                tab1, tab2 = st.tabs(["🔍 Interactive Querying", "📊 System Evaluation"])
+                
+                with tab1:
+                    step5_query_system(st.session_state.dirs, sha1_name, in_tab=True, company_name=company_name)
+                
+                with tab2:
+                    if 'step6' in st.session_state.processed_data:
+                        st.success("✅ Evaluation completed! Check results above.")
+                        if st.button("🔄 Run Evaluation Again"):
+                            result6 = evaluate_rag_system(st.session_state.dirs, sha1_name, company_name=company_name)
+                            if result6:
+                                st.session_state.processed_data['step6'] = result6
+                    else:
+                        evaluate_rag_system(st.session_state.dirs, sha1_name, company_name=company_name)
+            else:
+                # Only show query interface (no evaluation available)
+                st.subheader("🔍 Interactive Querying")
+                if st.session_state.document_type == "upload":
+                    st.info("📝 Evaluation not available for uploaded documents (no ground truth answers)")
+                step5_query_system(st.session_state.dirs, sha1_name, in_tab=True, company_name=company_name)
     
     else:
-        st.info("👆 Please upload a PDF file to begin the RAG demonstration")
+        st.info("👆 Please select a pre-made document or upload a PDF file to begin the RAG demonstration")
     
     # Reset button
     st.sidebar.markdown("---")
@@ -730,16 +1262,28 @@ def main():
        - **LLM Reranking**: Improves relevance using GPT-4o-mini
        - **Parent Document Retrieval**: Gets broader page context
        - **Chain of Thought**: Structured reasoning with step-by-step analysis
-       - **Performance Metrics**: Detailed timing and accuracy stats
+    6. **System Evaluation**: Comprehensive performance assessment with:
+       - **Answer Accuracy**: Comparison against ground truth answers
+       - **Performance Metrics**: Response time, throughput, success rates
+       - **Retrieval Quality**: Analysis of retrieved document relevance
+       - **Chain-of-Thought Analysis**: Evaluation of reasoning quality
     
     **Key Features**:
     - 🔄 **LLM Reranking**: Combines vector similarity with LLM relevance scoring
     - 📜 **Parent Retrieval**: Returns full page context instead of just chunks
     - 🧠 **Chain of Thought**: Generates structured reasoning with analysis
     - ⚙️ **Advanced Settings**: Configurable parameters for optimal performance
-    - 📊 **Performance Metrics**: Real-time timing and accuracy measurements
+    - 📊 **System Evaluation**: Built-in benchmarking against test questions
+    - 🎯 **Performance Tracking**: Real-time accuracy and timing measurements
     
-    **Requirements**: Enter your OpenAI API key in the sidebar to enable embeddings and advanced search.
+    **Evaluation Capabilities**:
+    - Tests against official RAG challenge questions when available
+    - Measures answer accuracy for boolean, numerical, and text questions
+    - Tracks processing time, throughput, and retrieval quality
+    - Provides detailed analysis of reasoning processes and errors
+    - Supports comparison of different configuration settings
+    
+    **Requirements**: Enter your OpenAI API key in the sidebar to enable embeddings, search, and evaluation.
     """)
 
 if __name__ == "__main__":
