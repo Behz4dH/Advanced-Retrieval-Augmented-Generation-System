@@ -72,7 +72,7 @@ if 'processed_data' not in st.session_state:
 if 'pipeline_step' not in st.session_state:
     st.session_state.pipeline_step = 0
 if 'openai_api_key' not in st.session_state:
-# Try Streamlit secrets first, then environment variables
+    # Try Streamlit secrets first, then environment variables
     try:
         st.session_state.openai_api_key = st.secrets["OPENAI_API_KEY"]
     except:
