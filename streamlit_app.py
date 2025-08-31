@@ -34,6 +34,17 @@ with st.expander("📋 Quick Start Guide - Click to View", expanded=False):
     tab1, tab2 = st.tabs(["🚀 Pre-made Demo (Recommended)", "📄 Upload Your Own"])
 
     with tab1:
+        # Add the demo GIF (animated)
+        import base64
+        with open("ezgif-40611ddf145955.gif", "rb") as gif_file:
+            gif_bytes = gif_file.read()
+            gif_base64 = base64.b64encode(gif_bytes).decode()
+        
+        st.markdown(
+            f'<div style="text-align: center;"><img src="data:image/gif;base64,{gif_base64}" alt="RAG Demo" style="max-width: 100%; height: auto;"/><p style="font-style: italic; color: gray;">🎬 See the RAG system in action!</p></div>',
+            unsafe_allow_html=True
+        )
+        
         st.markdown("""
         ### **Fastest Way to Test (30 seconds):**
         1. Select **"Pre-made Documents"** below
@@ -72,7 +83,7 @@ if 'processed_data' not in st.session_state:
 if 'pipeline_step' not in st.session_state:
     st.session_state.pipeline_step = 0
 if 'openai_api_key' not in st.session_state:
-    # Try Streamlit secrets first, then environment variables
+    # Try to get API key from Streamlit secrets first, then fallback to env var
     try:
         st.session_state.openai_api_key = st.secrets["OPENAI_API_KEY"]
     except:
@@ -441,42 +452,73 @@ def step5_query_system(dirs: Dict[Path, Path], sha1_name: str, in_tab: bool = Fa
                 documents_dir=dirs['chunked_dir']
             )
         
-        st.success("✅ Advanced retrieval system initialized")
+        # Keep initialization logic but hide success message
+        # st.success("✅ Advanced retrieval system initialized")
         
-        # Advanced settings display
-        with st.expander("⚙️ Current Settings", expanded=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**LLM Reranking:** {'✅' if st.session_state.advanced_settings['enable_reranking'] else '❌'}")
-                st.write(f"**Parent Retrieval:** {'✅' if st.session_state.advanced_settings['enable_parent_retrieval'] else '❌'}")
-                st.write(f"**Chain of Thought:** {'✅' if st.session_state.advanced_settings['enable_cot'] else '❌'}")
-            with col2:
-                st.write(f"**Top N Results:** {st.session_state.advanced_settings['top_n_retrieval']}")
-                st.write(f"**Reranking Sample:** {st.session_state.advanced_settings['reranking_sample_size']}")
-                st.write(f"**Model:** {st.session_state.advanced_settings['answering_model'][:20]}...")
+        # Keep settings logic but hide the display
+        # with st.expander("⚙️ Current Settings", expanded=False):
+        #     col1, col2 = st.columns(2)
+        #     with col1:
+        #         st.write(f"**LLM Reranking:** {'✅' if st.session_state.advanced_settings['enable_reranking'] else '❌'}")
+        #         st.write(f"**Parent Retrieval:** {'✅' if st.session_state.advanced_settings['enable_parent_retrieval'] else '❌'}")
+        #         st.write(f"**Chain of Thought:** {'✅' if st.session_state.advanced_settings['enable_cot'] else '❌'}")
+        #     with col2:
+        #         st.write(f"**Top N Results:** {st.session_state.advanced_settings['top_n_retrieval']}")
+        #         st.write(f"**Reranking Sample:** {st.session_state.advanced_settings['reranking_sample_size']}")
+        #         st.write(f"**Model:** {st.session_state.advanced_settings['answering_model'][:20]}...")
         
         # Query interface
         st.write("**Ask questions about your document:**")
         
-        # Sample queries
-        sample_queries = [
-            "What is the main topic of this document?",
-            "What are the key findings mentioned?",
-            "Tell me about any financial information",
-            "How much revenue was generated?",
-            "What recommendations are provided?"
-        ]
+        # Document-specific sample queries
+        if company_name == "Harry Potter":
+            sample_queries = [
+                "What exact words did the Sorting Hat say when placing Harry in Gryffindor?",
+                "What specific spell did Hermione use to unlock the door in their first year?",
+                "What was the name of Hagrid's three-headed dog and what made it fall asleep?",
+                "What did Harry see in the Mirror of Erised and how did Dumbledore explain it?",
+                "What ingredients were needed for the Polyjuice Potion Hermione brewed?"
+            ]
+        elif "Tradition" in company_name:
+            sample_queries = [
+                "What are Tradition's main business segments and activities?",
+                "Did Tradition announce a dividend payment?",
+                "What is the operating margin percentage?",
+                "What acquisitions did Tradition mention?",
+                "What are the main business challenges discussed?"
+            ]
+        else:
+            # Generic queries for uploaded documents
+            sample_queries = [
+                "What is the main topic of this document?",
+                "What are the key findings mentioned?",
+                "Tell me about any financial information",
+                "What recommendations are provided?",
+                "Summarize the most important points"
+            ]
+        
+        # Initialize query in session state if not exists
+        query_session_key = f"{'tab_' if in_tab else ''}current_query"
+        if query_session_key not in st.session_state:
+            st.session_state[query_session_key] = ""
         
         col1, col2 = st.columns([3, 1])
         with col1:
             query_key = "tab_query_input" if in_tab else "main_query_input"
-            query = st.text_input("Enter your question:", placeholder="What would you like to know about this document?", key=query_key)
+            query = st.text_input("Enter your question:", 
+                                placeholder="What would you like to know about this document?", 
+                                key=query_key,
+                                value=st.session_state[query_session_key])
+            # Update session state if user types in text input
+            if query != st.session_state[query_session_key]:
+                st.session_state[query_session_key] = query
         with col2:
             st.write("**Sample queries:**")
             for sample in sample_queries:
                 button_key = f"{'tab_' if in_tab else ''}sample_{sample[:20]}"
                 if st.button(sample, key=button_key):
-                    query = sample
+                    st.session_state[query_session_key] = sample
+                    st.rerun()
         
         search_button_key = f"{'tab_' if in_tab else ''}advanced_search_btn"
         if query and st.button("🔍 Advanced Search", type="primary", key=search_button_key):
@@ -924,11 +966,16 @@ def main():
     st.title("🔍 Advanced RAG Pipeline Demo")
     st.markdown("**Upload a PDF and watch the complete RAG process in action, plus evaluate system performance!**")
     
-      # API key is loaded from secrets - show status only
+    # Set OpenAI API key in environment if available
     if st.session_state.openai_api_key:
-        st.sidebar.success("✅ API Key Loaded")
+        os.environ["OPENAI_API_KEY"] = st.session_state.openai_api_key
+    
+    # Show API key status (without input field)
+    if st.session_state.openai_api_key:
+        st.sidebar.success("🔑 AI System Ready")
     else:
-        st.sidebar.error("❌ API Key Not Found in Secrets")
+        st.sidebar.error("❌ AI System Unavailable")
+        st.sidebar.markdown("*Contact administrator if this persists*")
 
 
     # # Sidebar with API key input and process overview
@@ -1066,7 +1113,7 @@ def main():
         st.write("**🚀 Quick Start (Pre-made Embeddings)**")
         if premade_docs:
             premade_options = ["Select a pre-made document..."] + [
-                f"{doc_info['name']} {'📊' if doc_info.get('has_evaluation') else '📖'}" 
+                f"{'Harry Potter Books Collection' if doc_info['name'] == 'Harry Potter' else doc_info['name']} {'📊' if doc_info.get('has_evaluation') else '📖'}" 
                 for doc_info in premade_docs.values()
             ]
             
@@ -1081,7 +1128,8 @@ def main():
                 selected_doc_name = selected_premade.split(' 📊')[0].split(' 📖')[0]  # Remove emojis
                 selected_doc_id = None
                 for doc_id, doc_info in premade_docs.items():
-                    if doc_info['name'] == selected_doc_name:
+                    display_name = 'Harry Potter Books Collection' if doc_info['name'] == 'Harry Potter' else doc_info['name']
+                    if display_name == selected_doc_name:
                         selected_doc_id = doc_id
                         break
                 
@@ -1089,14 +1137,14 @@ def main():
                     st.session_state.document_type = "premade"
                     st.session_state.selected_premade = selected_doc_id
                     
-                    # Show document info
+                    # Keep document info logic but hide the display
                     doc_info = premade_docs[selected_doc_id]
-                    st.info(f"**Selected**: {doc_info['name']}")
-                    st.write(f"📝 {doc_info['description']}")
-                    if doc_info.get('has_evaluation'):
-                        st.success("📊 Evaluation available for this document")
-                    else:
-                        st.info("📖 Query-only mode (no evaluation)")
+                    # st.info(f"**Selected**: {doc_info['name']}")
+                    # st.write(f"📝 {doc_info['description']}")
+                    # if doc_info.get('has_evaluation'):
+                    #     st.success("📊 Evaluation available for this document")
+                    # else:
+                    #     st.info("📖 Query-only mode (no evaluation)")
         else:
             st.warning("⚠️ No pre-made documents available.")
             with st.expander("📋 How to create pre-made embeddings"):
@@ -1194,7 +1242,7 @@ def main():
         
         # Show different UI based on document type
         if st.session_state.document_type == "premade":
-            st.info("✨ Pre-made embeddings loaded! Skip directly to querying and evaluation.")
+            pass  # Keep logic but hide the info message
             
         else:
             # Process button for uploaded documents
@@ -1310,28 +1358,16 @@ def main():
        - **LLM Reranking**: Improves relevance using GPT-4o-mini
        - **Parent Document Retrieval**: Gets broader page context
        - **Chain of Thought**: Structured reasoning with step-by-step analysis
-    6. **System Evaluation**: Comprehensive performance assessment with:
-       - **Answer Accuracy**: Comparison against ground truth answers
-       - **Performance Metrics**: Response time, throughput, success rates
-       - **Retrieval Quality**: Analysis of retrieved document relevance
-       - **Chain-of-Thought Analysis**: Evaluation of reasoning quality
+  
     
     **Key Features**:
     - 🔄 **LLM Reranking**: Combines vector similarity with LLM relevance scoring
     - 📜 **Parent Retrieval**: Returns full page context instead of just chunks
     - 🧠 **Chain of Thought**: Generates structured reasoning with analysis
     - ⚙️ **Advanced Settings**: Configurable parameters for optimal performance
-    - 📊 **System Evaluation**: Built-in benchmarking against test questions
     - 🎯 **Performance Tracking**: Real-time accuracy and timing measurements
     
-    **Evaluation Capabilities**:
-    - Tests against official RAG challenge questions when available
-    - Measures answer accuracy for boolean, numerical, and text questions
-    - Tracks processing time, throughput, and retrieval quality
-    - Provides detailed analysis of reasoning processes and errors
-    - Supports comparison of different configuration settings
-    
-    **Requirements**: Enter your OpenAI API key in the sidebar to enable embeddings, search, and evaluation.
+
     """)
 
 if __name__ == "__main__":
