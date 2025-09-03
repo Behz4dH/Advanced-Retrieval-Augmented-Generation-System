@@ -964,7 +964,7 @@ def evaluate_rag_system(dirs: Dict[Path, Path], sha1_name: str, company_name: st
 
 def main():
     st.title("🔍 Advanced RAG Pipeline Demo")
-    st.markdown("**Upload a PDF and watch the complete RAG process in action, plus evaluate system performance!**")
+    st.markdown("**Select a preloaded document Or Upload your own -> Ask any question about the document -> Get your answer with highest accuracy from the document itself (It's like magic!!!)**")
     
     # Set OpenAI API key in environment if available
     if st.session_state.openai_api_key:
