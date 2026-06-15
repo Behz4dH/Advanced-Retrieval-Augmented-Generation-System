@@ -1,0 +1,35 @@
+# ---- Secrets ----
+# The real secrets file. The `env` file (no dot) is kept as a tracked template.
+.env
+*.key
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.Python
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/.venv
+ENV/
+
+# ---- Pipeline outputs (regenerated locally; keep the repo lean) ----
+debug_data/
+databases/
+answers*.json
+!data/**/answers*.json
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Notebooks ----
+.ipynb_checkpoints/
